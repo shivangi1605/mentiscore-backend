@@ -1,116 +1,88 @@
-const db = require('../config/db');
+const { db } = require("../config/firebase");
 
-/* CREATE counselor profile */
-exports.createCounselorProfile = (req, res) => {
-  const {
-    auth_id,
-    college_id,
-    first_name,
-    last_name,
-    qualification,
-    specialization,
-    experience_years,
-    phone,
-    gender,
-    bio
-  } = req.body;
+exports.createCounselorProfile = async (req, res) => {
+  try {
+    const { auth_id, college_id, first_name, last_name, qualification, specialization, experience_years, phone, gender, bio } = req.body;
 
-  if (!auth_id || !college_id || !first_name || !last_name) {
-    return res.status(400).json({ message: 'Required fields missing' });
+    if (!auth_id || !college_id || !first_name || !last_name) {
+      return res.status(400).json({ message: "Required fields missing" });
+    }
+
+    await db.collection("counselors").doc(auth_id).set({
+      auth_id, college_id, first_name, last_name,
+      qualification: qualification ?? null,
+      specialization: specialization ?? null,
+      experience_years: experience_years ?? null,
+      phone: phone ?? null,
+      gender: gender ?? null,
+      bio: bio ?? null,
+      is_deleted: false,
+      createdAt: new Date().toISOString()
+    });
+
+    return res.status(201).json({ message: "Counselor profile created", counselor_id: auth_id });
+  } catch (err) {
+    console.error("createCounselorProfile error:", err);
+    return res.status(500).json({ message: "Failed to create counselor profile" });
   }
-
-  const sql = `
-    INSERT INTO counselors
-    (auth_id, college_id, first_name, last_name, qualification,
-     specialization, experience_years, phone, gender, bio)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `;
-
-  db.query(
-    sql,
-    [
-      auth_id,
-      college_id,
-      first_name,
-      last_name,
-      qualification,
-      specialization,
-      experience_years,
-      phone,
-      gender,
-      bio
-    ],
-    (err, result) => {
-      if (err) return res.status(400).json(err);
-      res.status(201).json({ message: 'Counselor profile created' });
-    }
-  );
 };
 
-/* GET counselor profile */
-exports.getCounselorProfile = (req, res) => {
-  const { auth_id } = req.params;
+exports.getCounselorProfile = async (req, res) => {
+  try {
+    const { auth_id } = req.params;
+    const doc = await db.collection("counselors").doc(auth_id).get();
 
-  const sql = `
-    SELECT * FROM counselors
-    WHERE auth_id = ? AND is_deleted = 0
-  `;
+    if (!doc.exists || doc.data().is_deleted) {
+      return res.status(404).json({ message: "Counselor not found" });
+    }
 
-  db.query(sql, [auth_id], (err, rows) => {
-    if (err) return res.status(500).json(err);
-    if (rows.length === 0)
-      return res.status(404).json({ message: 'Counselor not found' });
-
-    res.json(rows[0]);
-  });
+    return res.json(doc.data());
+  } catch (err) {
+    console.error("getCounselorProfile error:", err);
+    return res.status(500).json({ message: "Failed to fetch counselor profile" });
+  }
 };
 
-/* UPDATE counselor profile */
-exports.updateCounselorProfile = (req, res) => {
-  const { auth_id } = req.params;
-  const {
-    qualification,
-    specialization,
-    experience_years,
-    phone,
-    bio
-  } = req.body;
+exports.updateCounselorProfile = async (req, res) => {
+  try {
+    const { auth_id } = req.params;
+    const { qualification, specialization, experience_years, phone, bio } = req.body;
 
-  const sql = `
-    UPDATE counselors
-    SET qualification = ?,
-        specialization = ?,
-        experience_years = ?,
-        phone = ?,
-        bio = ?
-    WHERE auth_id = ? AND is_deleted = 0
-  `;
+    const ref = db.collection("counselors").doc(auth_id);
+    const doc = await ref.get();
 
-  db.query(
-    sql,
-    [
-      qualification,
-      specialization,
-      experience_years,
-      phone,
-      bio,
-      auth_id
-    ],
-    (err) => {
-      if (err) return res.status(500).json(err);
-      res.json({ message: 'Counselor profile updated' });
+    if (!doc.exists || doc.data().is_deleted) {
+      return res.status(404).json({ message: "Counselor not found" });
     }
-  );
+
+    await ref.update({
+      qualification: qualification ?? null,
+      specialization: specialization ?? null,
+      experience_years: experience_years ?? null,
+      phone: phone ?? null,
+      bio: bio ?? null
+    });
+
+    return res.json({ message: "Counselor profile updated" });
+  } catch (err) {
+    console.error("updateCounselorProfile error:", err);
+    return res.status(500).json({ message: "Failed to update counselor profile" });
+  }
 };
 
-exports.getAllCounselors = (req, res) => {
-  const sql = `SELECT * FROM counselors`;
+exports.getAllCounselors = async (req, res) => {
+  try {
+    const snapshot = await db.collection("users")
+      .where("role", "==", "counselor")
+      .get();
 
-  db.query(sql, (err, results) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).json({ message: "Failed to fetch counselors" });
-    }
-    res.json(results);
-  });
+    const counselors = snapshot.docs.map(doc => ({
+      auth_id: doc.id,
+      ...doc.data()
+    }));
+    return res.json(counselors);
+  } catch (err) {
+    console.error("getAllCounselors error:", err);
+    return res.status(500).json({ message: "Failed to fetch counselors" });
+  }
 };

@@ -1,6 +1,9 @@
-const db = require('../config/db');
+// src/controllers/studentController.js
+const { db } = require('../config/firebase');
 
-/* CREATE student profile */
+const usersCollection = db.collection('users');
+const activityLogsCollection = db.collection('activity_logs');
+
 exports.createStudentProfile = async (req, res) => {
   try {
     const {
@@ -12,101 +15,101 @@ exports.createStudentProfile = async (req, res) => {
       enrollment_no,
       department,
       current_year,
-      phone
-    } = req.body;
+      phone,
+      gender = null,
+      dob = null,
+    } = req.body || {};
 
-    if (!auth_id) {
-      return res.status(400).json({ message: "auth_id is required" });
+    const tokenAuthId = req.user?.auth_id || null;
+    const effectiveAuthId = tokenAuthId || auth_id;
+
+    if (!effectiveAuthId) {
+      return res.status(400).json({ message: 'auth_id is required' });
     }
 
-    // 1️⃣ Insert into student_details
-    await db.query(
-      `INSERT INTO student_details
-       (auth_id, college_id, first_name, middle_name, last_name,
-        enrollment_no, department, current_year, phone)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        auth_id,
-        college_id,
+    if (!first_name || !last_name) {
+      return res.status(400).json({ message: 'First name and last name are required' });
+    }
+
+    await usersCollection.doc(String(effectiveAuthId)).set(
+      {
+        role: 'student',
+        student_id: String(effectiveAuthId),
+        college_id: college_id ? String(college_id) : '',
         first_name,
-        middle_name,
+        middle_name: middle_name || '',
         last_name,
-        enrollment_no,
-        department,
-        current_year,
-        phone
-      ]
+        enrollment_no: enrollment_no || '',
+        department: department || '',
+        current_year: current_year || '',
+        phone: phone || '',
+        gender,
+        dob,
+        profileStatus: 'pending',
+        status: 'active',
+        updated_at: new Date().toISOString(),
+      },
+      { merge: true }
     );
 
-    // 2️⃣ Update profile_status → pending
-    await db.query(
-      `UPDATE users_auth
-       SET profile_status = 'pending'
-       WHERE auth_id = ?`,
-      [auth_id]
-    );
+    await activityLogsCollection.add({
+      action: 'create_student_profile',
+      module: 'student',
+      reference_id: String(effectiveAuthId),
+      performed_by: String(effectiveAuthId),
+      created_at: new Date().toISOString(),
+    });
 
     return res.status(201).json({
-      message: "Profile submitted. Waiting for approval."
+      message: 'Profile submitted. Waiting for approval.',
     });
-
   } catch (error) {
-    console.error("Profile Creation Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
+    console.error('createStudentProfile error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
 };
 
-/* GET student profile */
 exports.getStudentProfile = async (req, res) => {
   try {
-    const { auth_id } = req.params;
+    const authId = req.user?.auth_id || req.params?.auth_id;
 
-    const [rows] = await db.query(
-      "SELECT * FROM student_details WHERE auth_id = ?",
-      [auth_id]
-    );
-
-    if (rows.length === 0) {
-      return res.status(404).json({ message: "Student not found" });
+    if (!authId) {
+      return res.status(400).json({ message: 'auth_id is required' });
     }
 
-    return res.json(rows[0]);
+    const userDoc = await usersCollection.doc(String(authId)).get();
 
-  } catch (error) {
-    console.error("Profile fetch error:", error);
-    return res.status(500).json({ message: "Internal server error" });
-  }
-};
+    if (!userDoc.exists) {
+      return res.status(404).json({ message: 'Student profile not found' });
+    }
 
-/* UPDATE student profile */
-exports.updateStudentProfile = (req, res) => {
-  const { auth_id } = req.params;
-  const { phone, department, current_year } = req.body;
-
-  const sql = `
-    UPDATE student_details
-    SET phone = ?, department = ?, current_year = ?
-    WHERE auth_id = ?
-  `;
-
-  db.query(sql, [phone, department, current_year, auth_id], (err) => {
-    if (err) return res.status(500).json(err);
-    res.json({ message: 'Student profile updated' });
-  });
-};
-
-exports.bookSession = (req, res) => {
-  if (!req.body) {
-    return res.status(400).json({
-      message: "Request body missing"
+    return res.json({
+      auth_id: authId,
+      ...userDoc.data(),
     });
+  } catch (error) {
+    console.error('getStudentProfile error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
+};
 
-  const { student_id, counselor_id, slot_id, session_type } = req.body;
+exports.updateStudentProfile = async (req, res) => {
+  try {
+    const authId = req.user?.auth_id || req.params?.auth_id;
 
-  if (!student_id || !counselor_id || !slot_id || !session_type) {
-    return res.status(400).json({ message: "All fields are required" });
+    if (!authId) {
+      return res.status(400).json({ message: 'auth_id is required' });
+    }
+
+    const updates = { ...req.body, updated_at: new Date().toISOString() };
+    delete updates.auth_id;
+    delete updates.role;
+
+    await usersCollection.doc(String(authId)).set(updates, { merge: true });
+
+    return res.json({ message: 'Profile updated successfully' });
+  } catch (error) {
+    console.error('updateStudentProfile error:', error);
+    return res.status(500).json({ message: 'Internal server error' });
   }
-
-  // rest of your code...
 };

@@ -4,6 +4,7 @@ const studentController = require('../controllers/studentController');
 const { verifyToken, allowRoles } = require('../middleware/authMiddleware');
 
 /* CREATE student profile */
+console.log("allowRoles:", allowRoles);
 router.post(
   '/profile',
   verifyToken,

@@ -1,7 +1,11 @@
+// src/routes/authRoutes.js
 const express = require('express');
 const router = express.Router();
-const { studentSignup, login, googleLogin } = require('../controllers/authController');
-router.post('/google', googleLogin);
-router.post('/student/signup', studentSignup);
-router.post('/login', login);
+const authController = require('../controllers/authController');
+
+router.post('/register', authController.studentSignup);
+router.post('/login', authController.login);
+router.post('/google', authController.googleLogin);
+router.post('/admin/login', authController.adminLogin);
+
 module.exports = router;

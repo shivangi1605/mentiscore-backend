@@ -1,78 +1,259 @@
-const db = require('../config/db');
+const { db } = require("../config/firebase");
 
-/* CREATE booking */
-exports.createBooking = (req, res) => {
-  const {
-    student_id,
-    counselor_id,
-    slot_id,
-    session_type
-  } = req.body;
+const bookingsCollection = db.collection("bookings");
+const slotsCollection = db.collection("slots");
+const notificationsCollection = db.collection("notifications");
+const logsCollection = db.collection("activity_logs");
 
-  if (!student_id || !counselor_id || !slot_id) {
-    return res.status(400).json({ message: 'Missing required fields' });
+exports.createBooking = async (req, res) => {
+  try {
+    const { student_id, counselor_id, slot_id, session_type } = req.body || {};
+
+    if (!student_id || !counselor_id || !slot_id || !session_type) {
+      return res.status(400).json({ message: "Missing required booking fields" });
+    }
+
+    const slotRef = slotsCollection.doc(slot_id);
+    const slotDoc = await slotRef.get();
+
+    if (!slotDoc.exists) {
+      return res.status(404).json({ message: "Slot not found" });
+    }
+
+    const slot = slotDoc.data();
+
+    if (slot.is_booked) {
+      return res.status(400).json({ message: "Slot already booked" });
+    }
+
+    const bookingRef = await bookingsCollection.add({
+      student_id,
+      counselor_id,
+      slot_id,
+      session_type,
+      status: "pending",
+      booked_at: new Date().toISOString(),
+      approved_at: null,
+      completed_at: null,
+      cancelled_at: null,
+      meet_link: null,
+      scheduled_start: slot.start_time ?? null,
+      scheduled_end: slot.end_time || null,
+    });
+
+    await slotRef.update({
+      booking_id: bookingRef.id,
+      is_booked: true,
+      updated_at: new Date().toISOString(),
+    });
+
+    await notificationsCollection.add({
+      user_id: counselor_id,
+      type: "booking",
+      title: "New booking request",
+      message: "A student has requested a session.",
+      reference_id: bookingRef.id,
+      is_read: false,
+      created_at: new Date().toISOString(),
+    });
+
+    await logsCollection.add({
+      action: "create_booking",
+      module: "booking",
+      reference_id: bookingRef.id,
+      performed_by: student_id,
+      created_at: new Date().toISOString(),
+    });
+
+    return res.status(201).json({
+      message: "Booking created successfully",
+      booking_id: bookingRef.id,
+    });
+  } catch (err) {
+    console.error("createBooking error:", err);
+    return res.status(500).json({ message: "Failed to create booking" });
   }
+};
 
-  const sql = `
-    INSERT INTO session_bookings
-    (student_id, counselor_id, slot_id, session_type, status)
-    VALUES (?, ?, ?, ?, 'booked')
-  `;
+exports.getStudentBookings = async (req, res) => {
+  try {
+    const { student_id } = req.params;
+    const { status } = req.query;
 
-  db.query(
-    sql,
-    [student_id, counselor_id, slot_id, session_type],
-    (err, result) => {
-      if (err) return res.status(500).json(err);
+    let query = bookingsCollection.where("student_id", "==", student_id);
+    
+    if (status) {
+      query = query.where("status", "==", status);
+    }
 
-      // mark slot as booked
-      db.query(
-        `UPDATE availability_slots SET is_booked = 1 WHERE slot_id = ?`,
-        [slot_id],
-        (err) => {
-          if (err) {
-            console.error('Error marking slot as booked:', err);
-          }
-        }
-      );
+    const snapshot = await query.get();
+    const rows = snapshot.docs.map((doc) => ({
+      booking_id: doc.id,
+      ...doc.data(),
+    }));
 
-      res.status(201).json({
-        message: 'Session booked successfully',
-        booking_id: result.insertId
+    return res.json(rows);
+  } catch (err) {
+    console.error("getStudentBookings error:", err);
+    return res.status(500).json({ message: "Failed to fetch student bookings" });
+  }
+};
+
+exports.getCounselorBookings = async (req, res) => {
+  try {
+    const { counselor_id } = req.params;
+    const snapshot = await bookingsCollection.where("counselor_id", "==", counselor_id).get();
+
+    const rows = snapshot.docs.map((doc) => ({
+      booking_id: doc.id,
+      ...doc.data(),
+    }));
+
+    return res.json(rows);
+  } catch (err) {
+    console.error("getCounselorBookings error:", err);
+    return res.status(500).json({ message: "Failed to fetch counselor bookings" });
+  }
+};
+
+exports.approveBooking = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
+
+    const bookingRef = bookingsCollection.doc(booking_id);
+    const bookingDoc = await bookingRef.get();
+
+    if (!bookingDoc.exists) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    const booking = bookingDoc.data();
+
+    await bookingRef.update({
+      status: "approved",
+      approved_at: new Date().toISOString(),
+      meet_link:
+        booking.session_type === "chat"
+          ? null
+          : `https://meet.google.com/mock-${booking_id.slice(0, 8)}`,
+    });
+
+    await notificationsCollection.add({
+      user_id: booking.student_id,
+      type: "booking",
+      title: "Session approved",
+      message: "Your counseling session has been approved.",
+      reference_id: booking_id,
+      is_read: false,
+      created_at: new Date().toISOString(),
+    });
+
+    await logsCollection.add({
+      action: "approve_booking",
+      module: "booking",
+      reference_id: booking_id,
+      performed_by: req.user?.auth_id || "system",
+      created_at: new Date().toISOString(),
+    });
+
+    return res.json({ message: "Booking approved successfully" });
+  } catch (err) {
+    console.error("approveBooking error:", err);
+    return res.status(500).json({ message: "Failed to approve booking" });
+  }
+};
+
+exports.cancelBooking = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
+
+    const bookingRef = bookingsCollection.doc(booking_id);
+    const bookingDoc = await bookingRef.get();
+
+    if (!bookingDoc.exists) {
+      return res.status(404).json({ message: "Booking not found" });
+    }
+
+    const booking = bookingDoc.data();
+
+    await bookingRef.update({
+      status: "cancelled",
+      cancelled_at: new Date().toISOString(),
+    });
+
+    if (booking.slot_id) {
+      await slotsCollection.doc(booking.slot_id).update({
+        is_booked: false,
+        booking_id: null,
+        updated_at: new Date().toISOString(),
       });
     }
-  );
+
+    return res.json({ message: "Booking cancelled successfully" });
+  } catch (err) {
+    console.error("cancelBooking error:", err);
+    return res.status(500).json({ message: "Failed to cancel booking" });
+  }
 };
 
-/* GET bookings by student */
-exports.getStudentBookings = (req, res) => {
-  const { student_id } = req.params;
+exports.completeBooking = async (req, res) => {
+  try {
+    const { booking_id } = req.params;
 
-  const sql = `
-    SELECT sb.*, a.slot_date, a.start_time, a.end_time
-    FROM session_bookings sb
-    JOIN availability_slots a ON sb.slot_id = a.slot_id
-    WHERE sb.student_id = ?
-  `;
+    await bookingsCollection.doc(booking_id).update({
+      status: "completed",
+      completed_at: new Date().toISOString(),
+    });
 
-  db.query(sql, [student_id], (err, rows) => {
-    if (err) return res.status(500).json(err);
-    res.json(rows);
-  });
+    return res.json({ message: "Booking marked as completed" });
+  } catch (err) {
+    console.error("completeBooking error:", err);
+    return res.status(500).json({ message: "Failed to complete booking" });
+  }
 };
 
-/* CANCEL booking */
-exports.cancelBooking = (req, res) => {
-  const { booking_id } = req.params;
+exports.rescheduleBooking = async (req, res) => {
+  return res.status(501).json({ message: "Reschedule not implemented yet" });
+};
 
-  const sql = `
-    UPDATE session_bookings
-    SET status = 'cancelled'
-    WHERE booking_id = ?
-  `;
+exports.getCounselorBookings = async (req, res) => {
+  try {
+    const { counselor_id } = req.params;
+    const { status } = req.query;
 
-  db.query(sql, [booking_id], (err) => {
-    if (err) return res.status(500).json(err);
-    res.json({ message: 'Booking cancelled' });
-  });
+    let query = bookingsCollection.where("counselor_id", "==", counselor_id);
+    
+    if (status) {
+      query = query.where("status", "==", status);
+    }
+
+    const snapshot = await query.get();
+    const rows = snapshot.docs.map((doc) => ({
+      booking_id: doc.id,
+      ...doc.data(),
+    }));
+
+    return res.json(rows);
+  } catch (err) {
+    console.error("getCounselorBookings error:", err);
+    return res.status(500).json({ message: "Failed to fetch counselor bookings" });
+  }
+};
+
+exports.getAllBookings = async (req, res) => {
+  try {
+    const snapshot = await bookingsCollection.orderBy("booked_at", "desc").get();
+    const rows = snapshot.docs.map((doc) => ({
+      booking_id: doc.id,
+      ...doc.data(),
+    }));
+    return res.json(rows);
+  } catch (err) {
+    console.error("getAllBookings error:", err);
+    return res.status(500).json({ message: "Failed to fetch bookings" });
+  }
+};
+
+exports.getChatByBooking = async (req, res) => {
+  return res.status(501).json({ message: "Chat fetch not implemented yet" });
 };

@@ -1,83 +1,93 @@
-const db = require('../config/db');
+const { db } = require("../config/firebase");
 
-/* CREATE availability slot */
-exports.createAvailabilitySlot = (req, res) => {
-  const {
-    counselor_id,
-    slot_date,
-    start_time,
-    end_time,
-    day_of_week
-  } = req.body;
+exports.getSlotsByCounselor = async (req, res) => {
+  try {
+    const counselorId = req.params.counselor_id;
 
-  if (!counselor_id || !slot_date || !start_time || !end_time) {
-    return res.status(400).json({ message: 'Missing required fields' });
-  }
-
-  const sql = `
-    INSERT INTO availability_slots
-    (counselor_id, slot_date, start_time, end_time, day_of_week)
-    VALUES (?, ?, ?, ?, ?)
-  `;
-
-  db.query(
-    sql,
-    [counselor_id, slot_date, start_time, end_time, day_of_week],
-    (err, result) => {
-      if (err) return res.status(500).json(err);
-      res.status(201).json({
-        message: 'Availability slot created',
-        slot_id: result.insertId
-      });
+    if (!counselorId) {
+      return res.status(400).json({ message: "Invalid counselor_id" });
     }
-  );
+
+    const snapshot = await db.collection("slots")
+      .where("counselor_id", "==", counselorId)
+      .where("isActive", "==", true)
+      .where("isBooked", "==", false)
+      .get();
+
+    const slots = snapshot.docs.map(doc => ({ slot_id: doc.id, ...doc.data() }));
+    return res.json(slots);
+  } catch (err) {
+    console.error("getSlotsByCounselor error:", err);
+    return res.status(500).json({ message: "Failed to load slots" });
+  }
 };
 
-/* GET slots by counselor */
-exports.getSlotsByCounselor = (req, res) => {
-  const { counselor_id } = req.params;
+exports.createAvailabilitySlot = async (req, res) => {
+  try {
+    const { counselor_id, slot_date, start_time, end_time, day_of_week } = req.body;
 
-  const sql = `
-    SELECT * FROM availability_slots
-    WHERE counselor_id = ? AND is_active = 1
-    ORDER BY slot_date, start_time
-  `;
+    if (!counselor_id || !slot_date || !start_time || !end_time) {
+      return res.status(400).json({ message: "Missing required fields" });
+    }
 
-  db.query(sql, [counselor_id], (err, rows) => {
-    if (err) return res.status(500).json(err);
-    res.json(rows);
-  });
+    const ref = db.collection("slots").doc();
+    await ref.set({
+      counselor_id,
+      slotDate: slot_date,
+      startTime: start_time,
+      endTime: end_time,
+      dayOfWeek: day_of_week ?? null,
+      isBooked: false,
+      isActive: true,
+      createdAt: new Date().toISOString()
+    });
+
+    return res.status(201).json({ message: "Availability slot created", slot_id: ref.id });
+  } catch (err) {
+    console.error("createAvailabilitySlot error:", err);
+    return res.status(500).json({ message: "Failed to create slot" });
+  }
 };
 
-/* UPDATE slot (book / unbook) */
-exports.updateSlotStatus = (req, res) => {
-  const { slot_id } = req.params;
-  const { is_booked } = req.body;
+exports.updateSlotStatus = async (req, res) => {
+  try {
+    const { slot_id } = req.params;
+    const { is_booked } = req.body;
 
-  const sql = `
-    UPDATE availability_slots
-    SET is_booked = ?
-    WHERE slot_id = ?
-  `;
+    if (is_booked === undefined) {
+      return res.status(400).json({ message: "is_booked is required" });
+    }
 
-  db.query(sql, [is_booked, slot_id], (err) => {
-    if (err) return res.status(500).json(err);
-    res.json({ message: 'Slot updated' });
-  });
+    const ref = db.collection("slots").doc(slot_id);
+    const doc = await ref.get();
+
+    if (!doc.exists) {
+      return res.status(404).json({ message: "Slot not found" });
+    }
+
+    await ref.update({ is_booked: Boolean(is_booked) });
+    return res.json({ message: "Slot updated" });
+  } catch (err) {
+    console.error("updateSlotStatus error:", err);
+    return res.status(500).json({ message: "Failed to update slot" });
+  }
 };
 
-/* DELETE slot (soft delete) */
-exports.deleteSlot = (req, res) => {
-  const { slot_id } = req.params;
+exports.deleteSlot = async (req, res) => {
+  try {
+    const { slot_id } = req.params;
 
-  const sql = `
-    UPDATE availability_slots
-    SET is_active = 0
-    WHERE slot_id = ?
-  `;
+    const ref = db.collection("slots").doc(slot_id);
+    const doc = await ref.get();
 
-  db.query(sql, [slot_id], (err) => {
-    if (err) return res.status(500).json(err);
-    res.json({ message: 'Slot removed' });
-  });
+    if (!doc.exists) {
+      return res.status(404).json({ message: "Slot not found" });
+    }
+
+    await ref.update({ is_active: false });
+    return res.json({ message: "Slot removed" });
+  } catch (err) {
+    console.error("deleteSlot error:", err);
+    return res.status(500).json({ message: "Failed to delete slot" });
+  }
 };

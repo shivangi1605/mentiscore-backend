@@ -2,27 +2,13 @@ const express = require('express');
 const router = express.Router();
 const availabilityController = require('../controllers/availabilityController');
 
-router.post(
-  '/availability',
-  availabilityController.createAvailabilitySlot
-);
+// ✅ REMOVE extra /availability here
+router.post('/', availabilityController.createAvailabilitySlot);
 
-router.get(
-  '/availability/:counselor_id',
-  availabilityController.getSlotsByCounselor
-);
+router.get('/:counselor_id', availabilityController.getSlotsByCounselor);
 
-router.put(
-  '/availability/:slot_id',
-  availabilityController.updateSlotStatus
-);
+router.put('/:slot_id', availabilityController.updateSlotStatus);
 
-router.delete(
-  '/availability/:slot_id',
-  availabilityController.deleteSlot
-);
-
-
-console.log("Loaded: sessionRoutes");
+router.delete('/:slot_id', availabilityController.deleteSlot);
 
 module.exports = router;

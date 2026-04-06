@@ -46,8 +46,8 @@ router.put(
 
 router.put("/complete/:booking_id", sessionController.completeSession);
 
-console.log("Loaded: sessionRoutes");
+router.get("/counselor/:counselor_id/:status", sessionController.getCounselorSessionsByStatus);
 
-
+router.get("/all", sessionController.getAllSessions);
 
 module.exports = router;

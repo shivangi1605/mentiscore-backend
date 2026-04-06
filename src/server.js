@@ -1,25 +1,33 @@
-require("dotenv").config({ path: "./.env" });
+require("dotenv").config();
 const http = require("http");
-const express = require("express"); // ✅ ADD THIS
 const app = require("./app");
 const server = http.createServer(app);
-const adminRoutes = require('./routes/adminRoutes');
-app.use('/api/admin', adminRoutes);
-app.use("/uploads", express.static("uploads"));
+// SOCKET
 const { Server } = require("socket.io");
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://localhost:5173",
+  "http://localhost:5174",
+];
 
-const io = new Server(server, {
-  cors: {
-    origin: ["http://localhost:3000", "http://localhost:3001"],
-    credentials: true
-  }
+const io = require("socket.io")(server, {
+  cors: { origin: "*" }
 });
+
+app.set("io", io);
+
+io.on("connection", (socket) => {
+  socket.on("join_counselor_room", (counselor_id) => {
+    socket.join(`counselor_${counselor_id}`);
+  });
+});
+
 const sessionController = require("./controllers/sessionController");
 sessionController.setSocket(io);
 
 require("./sockets/chatSocket")(io);
 
 server.listen(5000, () => {
-  console.log("Server running");
+  console.log("Server running on port 5000");
 });
-console.log("CHAT_SECRET_KEY:", process.env.CHAT_SECRET_KEY);

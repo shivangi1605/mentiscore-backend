@@ -1,6 +1,39 @@
-const db = require("../config/db");
+// const db = require("../config/db"); /
 const { createMeetEvent } = require("../services/calendarService");
 let io;
+
+const ALLOWED_STATUSES = ['pending', 'approved', 'completed', 'cancelled'];
+
+const resolveId = (value) => {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const fetchCounselorSessionsByStatus = (counselorId, status, res) => {
+  const sql = `
+    SELECT
+      sb.*,
+      a.slot_date,
+      a.start_time,
+      a.end_time,
+      CONCAT(sd.first_name, ' ', sd.last_name) AS studentName,
+      CONCAT(c.first_name, ' ', c.last_name) AS counselorName
+    FROM session_bookings sb
+    JOIN availability_slots a ON sb.slot_id = a.slot_id
+    JOIN student_details sd ON sb.student_id = sd.student_id
+    JOIN counselors c ON sb.counselor_id = c.counselor_id
+    WHERE sb.counselor_id = ? AND sb.status = ?
+    ORDER BY sb.booked_at DESC
+  `;
+
+  db.query(sql, [counselorId, status], (err, results) => {
+    if (err) {
+      console.error("Counselor session fetch error:", err);
+      return res.status(500).json({ message: "Failed to fetch sessions" });
+    }
+    res.json(results);
+  });
+};
 
 exports.setSocket = (socketIo) => {
   io = socketIo;
@@ -12,28 +45,79 @@ exports.setSocket = (socketIo) => {
 exports.bookSession = async (req, res) => {
   const { student_id, counselor_id, slot_id, session_type } = req.body;
 
-  if (!student_id || !counselor_id || !slot_id || !session_type) {
-    return res.status(400).json({ message: "All fields are required" });
+  const studentId = resolveId(student_id);
+  const counselorId = resolveId(counselor_id);
+  const slotId = resolveId(slot_id);
+  const normalizedSessionType = typeof session_type === 'string' ? session_type.trim() : '';
+
+  if (!studentId || !counselorId || !slotId || !normalizedSessionType) {
+    return res.status(400).json({ message: "student_id, counselor_id, slot_id and session_type are required" });
   }
 
   try {
-    const sql = `
-      INSERT INTO session_bookings
-      (student_id, counselor_id, slot_id, session_type)
-      VALUES (?, ?, ?, ?)
-    `;
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
 
-    const [result] = await db.query(sql, [
-      student_id,
-      counselor_id,
-      slot_id,
-      session_type,
-    ]);
+      const [studentRows] = await conn.query(
+        `SELECT student_id FROM student_details WHERE student_id = ?`,
+        [studentId]
+      );
 
-    res.status(201).json({
-      message: "Session booked successfully",
-      booking_id: result.insertId,
-    });
+      if (!studentRows.length) {
+        await conn.rollback();
+        return res.status(404).json({ message: "Student profile not found" });
+      }
+
+      const [slotRows] = await conn.query(
+        `
+          SELECT slot_id, counselor_id, is_active, is_booked
+          FROM availability_slots
+          WHERE slot_id = ?
+          FOR UPDATE
+        `,
+        [slotId]
+      );
+
+      const slot = slotRows?.[0];
+
+      if (!slot || slot.is_active !== 1 || slot.is_booked !== 0 || Number(slot.counselor_id) !== counselorId) {
+        await conn.rollback();
+        return res.status(409).json({ message: "Slot is no longer available" });
+      }
+
+      const resolvedCounselorId = Number(slot.counselor_id);
+
+      const [result] = await conn.query(
+        `
+          INSERT INTO session_bookings
+          (student_id, counselor_id, slot_id, session_type, status)
+          VALUES (?, ?, ?, ?, 'pending')
+        `,
+        [studentId, resolvedCounselorId, slotId, normalizedSessionType]
+      );
+
+      await conn.query(
+        `
+          UPDATE availability_slots
+          SET is_booked = 1
+          WHERE slot_id = ?
+        `,
+        [slotId]
+      );
+
+      await conn.commit();
+
+      return res.status(201).json({
+        message: "Session booked successfully",
+        booking_id: result.insertId,
+      });
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
 
   } catch (err) {
     console.error("Book session error:", err);
@@ -45,32 +129,17 @@ exports.bookSession = async (req, res) => {
  * COUNSELOR → View pending bookings
  */
 exports.getPendingSessionsForCounselor = (req, res) => {
-  const { counselor_id } = req.params;
-
-  const sql = `
-    SELECT *
-    FROM session_bookings
-    WHERE counselor_id = ?
-      AND status = 'pending'
-    ORDER BY booked_at DESC
-  `;
-
-  db.query(sql, [counselor_id], (err, results) => {
-    if (err) {
-      console.error("Fetch pending sessions error:", err);
-      return res.status(500).json({ message: "Failed to fetch sessions" });
-    }
-
-    res.json(results);
-  });
+  const counselorId = resolveId(req.params.counselor_id);
+  if (!counselorId) {
+    return res.status(400).json({ message: "Invalid counselor_id" });
+  }
+  fetchCounselorSessionsByStatus(counselorId, 'pending', res);
 };
 
 /**
  * COUNSELOR → Approve session
  */
 exports.approveSession = async (req, res) => {
-  console.log("🔥 APPROVE ROUTE HIT");
-
   const { booking_id } = req.params;
 
   try {
@@ -99,17 +168,25 @@ exports.approveSession = async (req, res) => {
     const startDateTime = new Date(`${dateOnly}T${session.start_time}`);
     const endDateTime = new Date(`${dateOnly}T${session.end_time}`);
 
-    const meetEvent = await createMeetEvent({
-      summary: "Counseling Session",
-      start: startDateTime.toISOString(),
-      end: endDateTime.toISOString(),
-      attendees: [
-        { email: "student@gmail.com" },
-        { email: "counselor@gmail.com" },
-      ],
-    });
+    let meet_link = null;
+    let calendar_event_id = null;
+    try {
+      const meetEvent = await createMeetEvent({
+        summary: "Counseling Session",
+        start: startDateTime.toISOString(),
+        end: endDateTime.toISOString(),
+        attendees: [
+          { email: "student@gmail.com" },
+          { email: "counselor@gmail.com" },
+        ],
+      });
 
-    // Update booking
+      meet_link = meetEvent?.hangoutLink ?? null;
+      calendar_event_id = meetEvent?.id ?? null;
+    } catch (meetErr) {
+      console.error("Google Meet creation failed (continuing approval):", meetErr);
+    }
+
     await db.query(
       `UPDATE session_bookings
        SET status = 'approved',
@@ -117,10 +194,9 @@ exports.approveSession = async (req, res) => {
            meet_link = ?,
            calendar_event_id = ?
        WHERE booking_id = ?`,
-      [meetEvent.hangoutLink, meetEvent.id, booking_id]
+      [meet_link, calendar_event_id, booking_id]
     );
 
-    // Mark slot booked
     await db.query(
       `UPDATE availability_slots
        SET is_booked = 1
@@ -130,33 +206,41 @@ exports.approveSession = async (req, res) => {
       [booking_id]
     );
 
-    // ✅ INSERT NOTIFICATION (INSIDE TRY, BEFORE res.json)
-    await db.query(
-      `INSERT INTO notifications (user_id, title, message)
-       VALUES (?, ?, ?)`,
-      [
-        session.student_id,
-        "Session Approved",
-        `Your counseling session has been approved. Join here: ${meetEvent.hangoutLink}`
-      ]
-    );
+    try {
+      await db.query(
+        `INSERT INTO notifications (user_id, title, message)
+         VALUES (?, ?, ?)`,
+        [
+          session.student_id,
+          "Session Approved",
+          meet_link
+            ? `Your counseling session has been approved. Join here: ${meet_link}`
+            : "Your counseling session has been approved.",
+        ]
+      );
 
-    // ✅ SEND RESPONSE ONLY ONCE
+      if (io) {
+        io.to(`user_${session.student_id}`).emit("newNotification", {
+          title: "Session Approved",
+          message: meet_link ? `Join here: ${meet_link}` : "Your counseling session has been approved.",
+        });
+      }
+    } catch (notificationErr) {
+      console.error("Notification insert failed:", notificationErr);
+    }
+
     res.json({
-      message: "Session approved & Google Meet created",
-      meet_link: meetEvent.hangoutLink,
+      message: meet_link ? "Session approved & Google Meet created" : "Session approved",
+      meet_link,
     });
 
   } catch (error) {
-    console.error("❌ Approval error:", error);
+    console.error("Approval error:", error);
     res.status(500).json({ message: "Session approval failed" });
   }
-  io.to(`user_${session.student_id}`).emit("newNotification", {
-  title: "Session Approved",
-  message: `Join here: ${meetEvent.hangoutLink}`
-});
 
 };
+
 exports.completeSession = (req, res) => {
   const { booking_id } = req.params;
 
@@ -181,49 +265,59 @@ exports.cancelSession = (req, res) => {
   );
 };
 
-// Approved sessions
 exports.getApprovedSessionsForCounselor = (req, res) => {
-  const { counselor_id } = req.params;
-
-  db.query(
-    `SELECT * FROM session_bookings
-     WHERE counselor_id = ? AND status = 'approved'
-     ORDER BY approved_at DESC`,
-    [counselor_id],
-    (err, results) => {
-      if (err) return res.status(500).json(err);
-      res.json(results);
-    }
-  );
+  const counselorId = resolveId(req.params.counselor_id);
+  if (!counselorId) {
+    return res.status(400).json({ message: "Invalid counselor_id" });
+  }
+  fetchCounselorSessionsByStatus(counselorId, 'approved', res);
 };
 
-// Completed sessions
 exports.getCompletedSessionsForCounselor = (req, res) => {
-  const { counselor_id } = req.params;
+  const counselorId = resolveId(req.params.counselor_id);
+  if (!counselorId) {
+    return res.status(400).json({ message: "Invalid counselor_id" });
+  }
+  fetchCounselorSessionsByStatus(counselorId, 'completed', res);
+};
 
-  db.query(
-    `SELECT * FROM session_bookings
-     WHERE counselor_id = ? AND status = 'completed'
-     ORDER BY completed_at DESC`,
-    [counselor_id],
-    (err, results) => {
-      if (err) return res.status(500).json(err);
-      res.json(results);
-    }
-  );
+exports.getCounselorSessionsByStatus = (req, res) => {
+  const counselorId = resolveId(req.params.counselor_id);
+  if (!counselorId) {
+    return res.status(400).json({ message: "Invalid counselor_id" });
+  }
+
+  const requestedStatus = (req.params.status || '').toLowerCase();
+  if (!ALLOWED_STATUSES.includes(requestedStatus)) {
+    return res.status(400).json({ message: "Invalid status" });
+  }
+
+  fetchCounselorSessionsByStatus(counselorId, requestedStatus, res);
 };
 
 exports.getSessionsForStudent = (req, res) => {
-  const { student_id } = req.params;
+  const studentId = resolveId(req.params.student_id);
+  if (!studentId) {
+    return res.status(400).json({ message: "Invalid student_id" });
+  }
 
   const sql = `
-    SELECT *
-    FROM session_bookings
-    WHERE student_id = ?
-    ORDER BY booked_at DESC
+    SELECT
+      sb.*,
+      a.slot_date,
+      a.start_time,
+      a.end_time,
+      CONCAT(sd.first_name, ' ', sd.last_name) AS studentName,
+      CONCAT(c.first_name, ' ', c.last_name) AS counselorName
+    FROM session_bookings sb
+    JOIN availability_slots a ON sb.slot_id = a.slot_id
+    JOIN student_details sd ON sb.student_id = sd.student_id
+    JOIN counselors c ON sb.counselor_id = c.counselor_id
+    WHERE sb.student_id = ?
+    ORDER BY sb.booked_at DESC
   `;
 
-  db.query(sql, [student_id], (err, results) => {
+  db.query(sql, [studentId], (err, results) => {
     if (err) {
       console.error("Student sessions fetch error:", err);
       return res.status(500).json({ message: "Failed to fetch sessions" });
@@ -233,50 +327,119 @@ exports.getSessionsForStudent = (req, res) => {
 };
 
 exports.getStudentSessionsByStatus = (req, res) => {
-  const { student_id, status } = req.params;
+  const studentId = resolveId(req.params.student_id);
+  if (!studentId) {
+    return res.status(400).json({ message: "Invalid student_id" });
+  }
 
-  const allowedStatus = ['pending', 'approved', 'completed', 'cancelled'];
-  if (!allowedStatus.includes(status)) {
+  const statusValue = (req.params.status || '').toLowerCase();
+  if (!ALLOWED_STATUSES.includes(statusValue)) {
     return res.status(400).json({ message: "Invalid status" });
   }
 
   const sql = `
-    SELECT *
-    FROM session_bookings
-    WHERE student_id = ? AND status = ?
-    ORDER BY booked_at DESC
+    SELECT
+      sb.*,
+      a.slot_date,
+      a.start_time,
+      a.end_time,
+      CONCAT(sd.first_name, ' ', sd.last_name) AS studentName,
+      CONCAT(c.first_name, ' ', c.last_name) AS counselorName
+    FROM session_bookings sb
+    JOIN availability_slots a ON sb.slot_id = a.slot_id
+    JOIN student_details sd ON sb.student_id = sd.student_id
+    JOIN counselors c ON sb.counselor_id = c.counselor_id
+    WHERE sb.student_id = ? AND sb.status = ?
+    ORDER BY sb.booked_at DESC
   `;
 
-  db.query(sql, [student_id, status], (err, results) => {
-    if (err) return res.status(500).json(err);
+  db.query(sql, [studentId, statusValue], (err, results) => {
+    if (err) {
+      console.error("Student sessions status fetch error:", err);
+      return res.status(500).json({ message: "Failed to fetch sessions" });
+    }
     res.json(results);
   });
 };
 
-exports.cancelSessionByStudent = (req, res) => {
+exports.cancelSessionByStudent = async (req, res) => {
   const { booking_id } = req.params;
+  try {
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
 
-  const sql = `
-    UPDATE session_bookings
-    SET status = 'cancelled',
-        cancelled_at = NOW()
-    WHERE booking_id = ?
-      AND status = 'pending'
-  `;
+      const [rows] = await conn.query(
+        `
+          SELECT slot_id
+          FROM session_bookings
+          WHERE booking_id = ?
+            AND status = 'pending'
+          FOR UPDATE
+        `,
+        [booking_id]
+      );
 
-  db.query(sql, [booking_id], (err, result) => {
-    if (err) {
-      console.error("Cancel session error:", err);
-      return res.status(500).json({ message: "Cancel failed" });
+      const booking = rows?.[0];
+      if (!booking) {
+        await conn.rollback();
+        return res.status(400).json({ message: "Only pending sessions can be cancelled" });
+      }
+
+      await conn.query(
+        `
+          UPDATE session_bookings
+          SET status = 'cancelled',
+              cancelled_at = NOW()
+          WHERE booking_id = ?
+        `,
+        [booking_id]
+      );
+
+      await conn.query(
+        `
+          UPDATE availability_slots
+          SET is_booked = 0
+          WHERE slot_id = ?
+        `,
+        [booking.slot_id]
+      );
+
+      await conn.commit();
+      return res.json({ message: "Session cancelled successfully" });
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
     }
-
-    if (result.affectedRows === 0) {
-      return res.status(400).json({
-        message: "Only pending sessions can be cancelled"
-      });
-    }
-
-    res.json({ message: "Session cancelled successfully" });
-  });
+  } catch (err) {
+    console.error("Cancel session error:", err);
+    return res.status(500).json({ message: "Cancel failed" });
+  }
 };
 
+exports.getAllSessions = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `
+        SELECT
+          sb.*,
+          a.slot_date,
+          a.start_time,
+          a.end_time,
+          CONCAT(sd.first_name, ' ', sd.last_name) AS studentName,
+          CONCAT(c.first_name, ' ', c.last_name) AS counselorName
+        FROM session_bookings sb
+        JOIN availability_slots a ON sb.slot_id = a.slot_id
+        JOIN student_details sd ON sb.student_id = sd.student_id
+        JOIN counselors c ON sb.counselor_id = c.counselor_id
+        ORDER BY sb.booked_at DESC
+      `
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error("getAllSessions error:", err);
+    res.status(500).json({ message: "Failed to fetch sessions" });
+  }
+};

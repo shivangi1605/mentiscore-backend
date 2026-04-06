@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const db = require("../config/db");
+// const db = require("../config/db"); /
 
 // Get notifications for user
 router.get("/:user_id", async (req, res) => {
