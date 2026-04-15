@@ -237,6 +237,52 @@ exports.adminLogin = async (req, res) => {
   }
 };
 
+exports.counselorSignup = async (req, res) => {
+  try {
+    const { email, password, first_name, last_name, college_id, qualification, specialization, phone } = req.body || {};
+
+    if (!email || !password || !first_name || !last_name) {
+      return res.status(400).json({ message: "Email, password, first name and last name are required" });
+    }
+
+    let firebaseUser;
+    try {
+      firebaseUser = await auth.createUser({ email, password });
+    } catch (err) {
+      if (err.code === "auth/email-already-exists") {
+        return res.status(400).json({ message: "Email already exists" });
+      }
+      throw err;
+    }
+
+    await usersCollection.doc(firebaseUser.uid).set({
+      email,
+      role: "counselor",
+      auth_provider: "email",
+      profileStatus: "pending",
+      status: "active",
+      firstName: first_name,
+      lastName: last_name,
+      college_id: college_id || null,
+      qualification: qualification || null,
+      specialization: specialization || null,
+      phone: phone || null,
+      counselor_id: firebaseUser.uid,
+      student_id: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    return res.status(201).json({
+      message: "Counselor account created. Awaiting admin approval.",
+      auth_id: firebaseUser.uid,
+    });
+  } catch (error) {
+    console.error("counselorSignup error:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 exports.getAllUsers = async (req, res) => {
   try {
     const snapshot = await usersCollection.orderBy("createdAt", "desc").get();
