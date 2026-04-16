@@ -2,17 +2,23 @@ require("dotenv").config();
 const http = require("http");
 const app = require("./app");
 const server = http.createServer(app);
-// SOCKET
-const { Server } = require("socket.io");
+
+const PORT = process.env.PORT || 5000;
+
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5173",
   "http://localhost:5174",
-];
+  process.env.FRONTEND_URL,
+].filter(Boolean);
 
 const io = require("socket.io")(server, {
-  cors: { origin: "*" }
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true,
+  },
 });
 
 app.set("io", io);
@@ -28,6 +34,6 @@ sessionController.setSocket(io);
 
 require("./sockets/chatSocket")(io);
 
-server.listen(5000, () => {
-  console.log("Server running on port 5000");
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
