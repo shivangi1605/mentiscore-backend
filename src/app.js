@@ -15,16 +15,16 @@ const adminRoutes = require('./routes/adminRoutes');
 const userRoutes = require('./routes/userRoutes');
 const collegeRoutes = require('./routes/collegeRoutes');
 
-const app = express(); // âœ… FIRST create app
+const app = express();
 app.use(requestLogger);
 
-// middlewares
 const allowedOrigins = [
   "http://localhost:3000",
   "http://localhost:3001",
   "http://localhost:5173",
   "http://localhost:5174",
-];
+  process.env.FRONTEND_URL,
+].filter(Boolean);
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -39,16 +39,13 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// health check
 app.get('/healthz', (req, res) => {
   res.status(200).send('OK');
 });
 
-// static files
 app.use("/uploads", express.static("uploads"));
 app.use("/frontend", express.static(path.join(__dirname, "../frontend")));
 
-// routes
 app.use('/api/auth', authRoutes);
 app.use('/api/student', studentRoutes);
 app.use('/api/counselors', counselorRoutes);
@@ -58,7 +55,6 @@ app.use('/api/admin', adminRoutes);
 app.use('/api/colleges', collegeRoutes);
 app.use('/api/chat', chatRoutes);
 
-// optional
 app.use("/api/google", require("./routes/googleRoutes"));
 app.use("/api/dev", require("./routes/devSeedRoutes"));
 
