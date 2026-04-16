@@ -39,6 +39,11 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// health check
+app.get('/healthz', (req, res) => {
+  res.status(200).send('OK');
+});
+
 // static files
 app.use("/uploads", express.static("uploads"));
 app.use("/frontend", express.static(path.join(__dirname, "../frontend")));
