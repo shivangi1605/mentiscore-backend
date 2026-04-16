@@ -1,33 +1,19 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const bookingController = require("../controllers/bookingController");
-const { verifyToken, allowRoles } = require('../middleware/authMiddleware');
+const bookingController = require('../controllers/bookingController');
+const { verifyToken, requireRole } = require('../middleware/authMiddleware');
 
-/* CREATE */
-router.post("/", bookingController.createBooking);
+// Student routes
+router.post('/book', verifyToken, requireRole(['student']), bookingController.createBooking);
+router.get('/student/:student_id', verifyToken, requireRole(['student']), bookingController.getStudentBookings);
 
-/* STUDENT BOOKINGS */
-router.get("/student/:student_id", bookingController.getStudentBookings);
+// Counselor routes
+router.get('/counselor/:counselor_id', verifyToken, requireRole(['counselor']), bookingController.getCounselorBookings);
+router.put('/approve/:booking_id', verifyToken, requireRole(['counselor']), bookingController.approveBooking);
+router.put('/complete/:booking_id', verifyToken, requireRole(['counselor']), bookingController.completeBooking);
 
-/* COUNSELOR BOOKINGS */
-router.get("/counselor/:counselor_id", bookingController.getCounselorBookings);
-
-/* APPROVE */
-router.put("/approve/:booking_id", verifyToken, allowRoles('counselor'), bookingController.approveBooking);
-
-/* CANCEL */
-router.put("/cancel/:booking_id", bookingController.cancelBooking);
-
-/* RESCHEDULE */
-router.put("/reschedule/:booking_id", bookingController.rescheduleBooking);
-
-/* GET CHAT */
-router.get("/chat/:booking_id", bookingController.getChatByBooking);
-
-/* COMPLETE */
-router.put("/complete/:booking_id", bookingController.completeBooking);
-
-/* ADMIN - GET ALL BOOKINGS */
-router.get("/", bookingController.getAllBookings);
+// Optional extras if frontend uses them
+router.put('/cancel/:booking_id', verifyToken, requireRole(['student', 'counselor']), bookingController.cancelBooking);
+router.put('/reschedule/:booking_id', verifyToken, requireRole(['student', 'counselor']), bookingController.rescheduleBooking);
 
 module.exports = router;

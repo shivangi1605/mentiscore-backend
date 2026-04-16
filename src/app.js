@@ -50,13 +50,11 @@ app.use('/api/counselors', counselorRoutes);
 app.use('/api/bookings', bookingRoutes);
 app.use('/api/availability', availabilityRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/users', userRoutes);
 app.use('/api/colleges', collegeRoutes);
 app.use('/api/chat', chatRoutes);
-app.use('/api/sessions', sessionRoutes);
-app.use("/api/google", require("./routes/googleRoutes"));
-app.use("/api/notifications", require("./routes/notificationRoutes"));
-app.use("/api/dev", require("./routes/devSeedRoutes"));
 
+// optional
+app.use("/api/google", require("./routes/googleRoutes"));
+app.use("/api/dev", require("./routes/devSeedRoutes"));
 
 module.exports = app;

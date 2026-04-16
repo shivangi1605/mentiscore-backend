@@ -14,7 +14,11 @@ exports.getSlotsByCounselor = async (req, res) => {
       .where("isBooked", "==", false)
       .get();
 
-    const slots = snapshot.docs.map(doc => ({ slot_id: doc.id, ...doc.data() }));
+    const slots = snapshot.docs.map(doc => ({
+      slot_id: doc.id,
+      ...doc.data()
+    }));
+
     return res.json(slots);
   } catch (err) {
     console.error("getSlotsByCounselor error:", err);
@@ -31,6 +35,7 @@ exports.createAvailabilitySlot = async (req, res) => {
     }
 
     const ref = db.collection("slots").doc();
+
     await ref.set({
       counselor_id,
       slotDate: slot_date,
@@ -42,7 +47,10 @@ exports.createAvailabilitySlot = async (req, res) => {
       createdAt: new Date().toISOString()
     });
 
-    return res.status(201).json({ message: "Availability slot created", slot_id: ref.id });
+    return res.status(201).json({
+      message: "Availability slot created",
+      slot_id: ref.id
+    });
   } catch (err) {
     console.error("createAvailabilitySlot error:", err);
     return res.status(500).json({ message: "Failed to create slot" });
@@ -52,10 +60,10 @@ exports.createAvailabilitySlot = async (req, res) => {
 exports.updateSlotStatus = async (req, res) => {
   try {
     const { slot_id } = req.params;
-    const { is_booked } = req.body;
+    const { isBooked } = req.body;
 
-    if (is_booked === undefined) {
-      return res.status(400).json({ message: "is_booked is required" });
+    if (isBooked === undefined) {
+      return res.status(400).json({ message: "isBooked is required" });
     }
 
     const ref = db.collection("slots").doc(slot_id);
@@ -65,7 +73,8 @@ exports.updateSlotStatus = async (req, res) => {
       return res.status(404).json({ message: "Slot not found" });
     }
 
-    await ref.update({ is_booked: Boolean(is_booked) });
+    await ref.update({ isBooked: Boolean(isBooked) });
+
     return res.json({ message: "Slot updated" });
   } catch (err) {
     console.error("updateSlotStatus error:", err);
@@ -84,7 +93,8 @@ exports.deleteSlot = async (req, res) => {
       return res.status(404).json({ message: "Slot not found" });
     }
 
-    await ref.update({ is_active: false });
+    await ref.update({ isActive: false });
+
     return res.json({ message: "Slot removed" });
   } catch (err) {
     console.error("deleteSlot error:", err);

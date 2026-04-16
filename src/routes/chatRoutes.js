@@ -19,4 +19,6 @@ router.get('/:chat_id/message', verifyToken, chatMessageController.getMessages);
 // send message
 router.post('/:chat_id/message', verifyToken, chatMessageController.sendMessage);
 
+// delete message
+router.delete('/:chat_id/message/:message_id', verifyToken, chatMessageController.deleteMessage);
 module.exports = router;

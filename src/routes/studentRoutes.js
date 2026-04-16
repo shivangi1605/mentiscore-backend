@@ -1,14 +1,13 @@
 const express = require('express');
 const router = express.Router();
 const studentController = require('../controllers/studentController');
-const { verifyToken, allowRoles } = require('../middleware/authMiddleware');
+const { verifyToken, requireRole } = require('../middleware/authMiddleware');
 
 /* CREATE student profile */
-console.log("allowRoles:", allowRoles);
 router.post(
   '/profile',
   verifyToken,
-  allowRoles('student'),
+  requireRole(['student']),
   studentController.createStudentProfile
 );
 
@@ -16,7 +15,7 @@ router.post(
 router.get(
   '/profile/:auth_id',
   verifyToken,
-  allowRoles('student'),
+  requireRole(['student']),
   studentController.getStudentProfile
 );
 
@@ -24,7 +23,7 @@ router.get(
 router.put(
   '/profile/:auth_id',
   verifyToken,
-  allowRoles('student'),
+  requireRole(['student']),
   studentController.updateStudentProfile
 );
 

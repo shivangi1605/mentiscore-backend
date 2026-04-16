@@ -1,5 +1,5 @@
 const { db } = require("../config/firebase");
-
+const chatSessionsCollection = db.collection("chat_sessions");
 const bookingsCollection = db.collection("bookings");
 const slotsCollection = db.collection("slots");
 const notificationsCollection = db.collection("notifications");
@@ -138,6 +138,36 @@ exports.approveBooking = async (req, res) => {
           : `https://meet.google.com/mock-${booking_id.slice(0, 8)}`,
     });
 
+    // create chat session automatically if one does not already exist
+    const existingChatSnap = await chatSessionsCollection
+      .where("booking_id", "==", booking_id)
+      .get();
+
+    let chat_id = null;
+
+    if (existingChatSnap.empty) {
+      const chatRef = chatSessionsCollection.doc();
+      await chatRef.set({
+        booking_id,
+        student_id: booking.student_id,
+        counselor_id: booking.counselor_id,
+        chat_type: "scheduled",
+        status: "active",
+        started_at: new Date().toISOString(),
+      });
+      chat_id = chatRef.id;
+    } else {
+      chat_id = existingChatSnap.docs[0].id;
+
+      const existingData = existingChatSnap.docs[0].data();
+      if (existingData.status !== "active") {
+        await chatSessionsCollection.doc(chat_id).update({
+          status: "active",
+          restarted_at: new Date().toISOString(),
+        });
+      }
+    }
+
     await notificationsCollection.add({
       user_id: booking.student_id,
       type: "booking",
@@ -156,7 +186,10 @@ exports.approveBooking = async (req, res) => {
       created_at: new Date().toISOString(),
     });
 
-    return res.json({ message: "Booking approved successfully" });
+    return res.json({
+      message: "Booking approved successfully",
+      chat_id,
+    });
   } catch (err) {
     console.error("approveBooking error:", err);
     return res.status(500).json({ message: "Failed to approve booking" });

@@ -6,7 +6,7 @@ const createBooking = async ({ student_id, counselor_id, slot_id, session_type, 
     const slotDoc = await slotRef.get();
 
     if (!slotDoc.exists) throw new Error("Slot not found");
-    if (slotDoc.data().is_booked) throw new Error("Slot already booked");
+    if (slotDoc.data().isBooked) throw new Error("Slot already booked");
 
     const bookingRef = db.collection("bookings").doc();
     const bookingId = bookingRef.id;
@@ -24,7 +24,10 @@ const createBooking = async ({ student_id, counselor_id, slot_id, session_type, 
       completed_at: null
     });
 
-    await slotRef.update({ is_booked: true, booking_id: bookingId });
+    await slotRef.update({
+      isBooked: true,
+      booking_id: bookingId
+    });
 
     await db.collection("chat_sessions").doc().set({
       booking_id: bookingId,
@@ -36,11 +39,17 @@ const createBooking = async ({ student_id, counselor_id, slot_id, session_type, 
     });
 
     if (io) {
-      io.to(`counselor_${counselor_id}`).emit("new_booking", { bookingId, student_id, slot_id });
+      io.to(`counselor_${counselor_id}`).emit("new_booking", {
+        bookingId,
+        student_id,
+        slot_id
+      });
     }
 
-    return { success: true, bookingId };
-
+    return {
+      success: true,
+      bookingId
+    };
   } catch (err) {
     throw err;
   }
