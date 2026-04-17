@@ -31,9 +31,15 @@ console.log("FRONTEND_URL:", process.env.FRONTEND_URL);
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || allowedOrigins.includes(origin)) {
+    if (!origin) return callback(null, true);
+
+    const isAllowed = allowedOrigins.some(o => origin.startsWith(o));
+
+    if (isAllowed) {
       return callback(null, true);
     }
+
+    console.log("❌ Blocked origin:", origin);
     return callback(new Error("Not allowed by CORS"));
   },
   credentials: true
